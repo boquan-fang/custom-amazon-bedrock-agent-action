@@ -57693,56 +57693,64 @@ async function main() {
         const { GITHUB_REPOSITORY: githubRepository } = process.env;
         const [owner, repo] = githubRepository.split('/');
 
-        let prNumber, prId, sessionId, changedFiles;
+        let sessionId, changedFiles = [];
 
-        if (eventName === 'pull_request') {
-            // Handle pull request event
-            ({ number: prNumber, id: prId } = payload.pull_request);
-            sessionId = `pr-${prId}-${prNumber}`;
-            core.info(`[${getTimestamp()}] Processing PR #${prNumber} (ID: ${prId}) in repository ${owner}/${repo}`);
-
-            // Check if the PR is being closed or merged
-            if (payload.action === 'closed') {
-                await handleClosedPR(agentId, agentAliasId, sessionId);
-                return;
-            }
-
-            // Fetch the list of files changed in the PR
-            const { data: prFiles } = await octokit.rest.pulls.listFiles({
-                owner, repo, pull_number: prNumber
-            });
-            changedFiles = prFiles;
-
-            // Fetch comments for the PR (if needed)
-            const { data: prComments } = await octokit.rest.issues.listComments({
-                owner, repo, issue_number: prNumber
-            });
-            comments = prComments;
-        } else if (eventName === 'push') {
-            // Handle push event
-            const pushId = payload.after;
-            const branchName = payload.ref.replace('refs/heads/', '');
-            sessionId = `push-${pushId}`;
-            core.info(`[${getTimestamp()}] Processing push (ID: ${pushId}) in repository ${owner}/${repo} on branch ${branchName}`);
-        
-            // Get the default branch name
+        if (eventName === 'workflow_dispatch') {
+            // Handle workflow_dispatch event
+            const workflowId = github.context.runId;
+            sessionId = `workflow-${workflowId}`;
+            core.info(`[${getTimestamp()}] Processing workflow_dispatch (ID: ${workflowId}) in repository ${owner}/${repo}`);
+            
+            // Get the default branch name to analyze repository files
             const { data: repoInfo } = await octokit.rest.repos.get({
                 owner,
                 repo
             });
             const defaultBranch = repoInfo.default_branch;
-        
-            // Fetch all changes in the branch compared to the default branch
-            const { data: comparison } = await octokit.rest.repos.compareCommits({
+            
+            // Get repository content from the default branch
+            const { data: repoContents } = await octokit.rest.repos.getContent({
                 owner,
                 repo,
-                base: defaultBranch,
-                head: branchName
+                path: '',
+                ref: defaultBranch
             });
-        
-            changedFiles = comparison.files;
+            
+            // Simulate changedFiles structure for repository analysis
+            changedFiles = repoContents.filter(item => item.type === 'file').map(file => ({
+                filename: file.path,
+                status: 'analyzed',
+            }));
+            
+        } else if (eventName === 'schedule') {
+            // Handle schedule event
+            const scheduleId = new Date().toISOString().replace(/[^0-9]/g, '');
+            sessionId = `schedule-${scheduleId}`;
+            core.info(`[${getTimestamp()}] Processing scheduled event (ID: ${scheduleId}) in repository ${owner}/${repo}`);
+            
+            // Get the default branch name to analyze repository files
+            const { data: repoInfo } = await octokit.rest.repos.get({
+                owner,
+                repo
+            });
+            const defaultBranch = repoInfo.default_branch;
+            
+            // Get repository content from the default branch
+            const { data: repoContents } = await octokit.rest.repos.getContent({
+                owner,
+                repo,
+                path: '',
+                ref: defaultBranch
+            });
+            
+            // Simulate changedFiles structure for repository analysis
+            changedFiles = repoContents.filter(item => item.type === 'file').map(file => ({
+                filename: file.path,
+                status: 'analyzed',
+            }));
+            
         } else {
-            core.setFailed(`Unsupported event type: ${eventName}`);
+            core.setFailed(`Unsupported event type: ${eventName}. This action only supports workflow_dispatch and schedule events.`);
             return;
         }
 
@@ -57767,7 +57775,7 @@ async function main() {
         // Initialize arrays to store relevant code and diffs
         const relevantCode = [];
         const relevantDiffs = [];
-        await Promise.all(changedFiles.map(file => processFile(file, allIgnorePatterns, relevantCode, relevantDiffs, owner, repo, eventName, eventName === 'pull_request' ? comments : undefined)));
+        await Promise.all(changedFiles.map(file => processFile(file, allIgnorePatterns, relevantCode, relevantDiffs, owner, repo, eventName)));
 
         // Check if there are any relevant code or diffs to analyze
         if (relevantDiffs.length === 0 && relevantCode.length === 0) {
@@ -57799,20 +57807,11 @@ async function main() {
             core.info(`[${getTimestamp()}] Bedrock Agent response:\n${agentResponse}`);
         }
 
-        // Post the agent's response as a comment for PR or print for other events
-        if (eventName === 'pull_request') {
-            core.info(`[${getTimestamp()}] Posting analysis comment to PR #${prNumber}`);
-            const commentBody = formatMarkdownComment(agentResponse, prNumber, relevantCode.length, relevantDiffs.length, changedFiles);
-            await octokit.rest.issues.createComment({
-                owner, repo, issue_number: prNumber, body: commentBody
-            });
-            core.info(`[${getTimestamp()}] Successfully posted comment to PR #${prNumber}`);
-        } else {
-            core.info(`[${getTimestamp()}] Printing analysis for ${eventName} event`);
-            const analysisOutput = formatMarkdownAnalysis(agentResponse, payload.after, relevantCode.length, relevantDiffs.length, changedFiles);
-            console.info(analysisOutput);
-            core.info(`[${getTimestamp()}] Analysis output printed to console`);
-        }
+        // Print analysis for workflow_dispatch and schedule events
+        core.info(`[${getTimestamp()}] Printing analysis for ${eventName} event`);
+        const analysisOutput = formatMarkdownAnalysis(agentResponse, eventName, relevantCode.length, relevantDiffs.length, changedFiles);
+        console.info(analysisOutput);
+        core.info(`[${getTimestamp()}] Analysis output printed to console`);
     } catch (error) {
         core.setFailed(`[${getTimestamp()}] Error: ${error.message}`);
     }
