@@ -57689,6 +57689,12 @@ async function main() {
 
         // Output the response
         console.info(`## Bedrock Agent Response\n\n${agentResponse}`);
+        
+        // Write the agentResponse to a patch file in /tmp
+        const patchFilePath = '/tmp/fix.patch';
+        fs.writeFileSync(patchFilePath, agentResponse);
+        core.info(`[${getTimestamp()}] Created patch file at ${patchFilePath}`);
+        
         core.info(`[${getTimestamp()}] Action completed successfully`);
 
     } catch (error) {
